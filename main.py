@@ -42,6 +42,12 @@ def run_selfcheck() -> int:
         win.show()
         app.processEvents()
         lines.append(f"ui          = pages={win.stack.count()}, cards={len(win.live_cards)}")
+        from ui.splash import avatar_pixmap
+        splash_pix = avatar_pixmap(96)
+        lines.append(
+            "splash      = "
+            + ("OK" if splash_pix is not None and not splash_pix.isNull() else "MISSING avatar")
+        )
         win.close()
         lines.append("SELFCHECK: PASS")
     except Exception:
