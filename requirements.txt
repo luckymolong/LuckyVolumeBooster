@@ -1,0 +1,7 @@
+PySide6-Essentials>=6.8
+pycaw>=20240210
+comtypes>=1.4
+pywin32>=306
+psutil>=6.0
+imageio-ffmpeg>=0.5
+pyinstaller>=6.0
