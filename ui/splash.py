@@ -62,7 +62,7 @@ class Splash(QWidget):
             Qt.FramelessWindowHint | Qt.SplashScreen | Qt.WindowStaysOnTopHint
         )
         self.setAttribute(Qt.WA_TranslucentBackground)
-        self._opacity = 0.0
+        self._phase = "idle"
         self._pix = avatar_pixmap(96)
         self._serif = self._pick_font()
 
@@ -80,7 +80,7 @@ class Splash(QWidget):
         self._fade.setDuration(self.FADE_IN_MS)
         self._fade.setStartValue(0.0)
         self._fade.setEndValue(1.0)
-        self._fade.finished.connect(self._hold)
+        self._fade.finished.connect(self._on_anim_done)
 
     @staticmethod
     def _pick_font() -> str | None:
@@ -92,27 +92,34 @@ class Splash(QWidget):
 
     # -------------------------------------------------- 流程控制
     def start(self) -> None:
+        self._phase = "in"
         self.show()
+        self.raise_()
         self._fade.start()
 
-    def _hold(self) -> None:
-        if self.windowOpacity() < 1.0:
-            return  # 是淡出动画结束的信号，直接收尾
-        QTimer.singleShot(self.HOLD_MS, self._fade_out)
+    def _on_anim_done(self) -> None:
+        """淡入 / 淡出共用一个动画对象，用阶段标志区分，不依赖 opacity 数值。"""
+        if self._phase == "in":
+            if self.windowOpacity() < 0.999:
+                return  # 淡入被打断的残留信号，忽略
+            self._phase = "hold"
+            QTimer.singleShot(self.HOLD_MS, self._start_fade_out)
+        elif self._phase == "out":
+            self._phase = "done"
+            self._finish()
 
-    def _fade_out(self) -> None:
+    def _start_fade_out(self) -> None:
+        self._phase = "out"
+        self._fade.stop()
         self._fade.setDuration(self.FADE_OUT_MS)
         self._fade.setStartValue(1.0)
         self._fade.setEndValue(0.0)
-        try:
-            self._fade.finished.disconnect(self._hold)
-        except Exception:
-            pass
-        self._fade.finished.connect(self._done)
         self._fade.start()
 
-    def _done(self) -> None:
+    def _finish(self) -> None:
         self.close()
+        if self in _KEEPALIVE:
+            _KEEPALIVE.remove(self)
         self.finished.emit()
 
     # -------------------------------------------------- 绘制
@@ -202,10 +209,17 @@ class Splash(QWidget):
         p.end()
 
 
+# 动画播放期间保住 Splash 实例：它没有 C++ 父对象，若无 Python 引用会被
+# CPython 立即回收，主窗口的 show() 就永远不会触发（表现为“程序打不开”）。
+_KEEPALIVE: list["Splash"] = []
+
+
 def splash_then_show(window) -> None:
     """播放启动动画，动画结束后 show 主窗口。window 需已创建但未显示。"""
     def _finish() -> None:
         window.show()
+        window.raise_()
+        window.activateWindow()
 
     if "--nosplash" in sys.argv:
         _finish()
@@ -213,6 +227,7 @@ def splash_then_show(window) -> None:
     try:
         splash = Splash()
         splash.finished.connect(_finish)
+        _KEEPALIVE.append(splash)
         splash.start()
     except Exception:
         _finish()
