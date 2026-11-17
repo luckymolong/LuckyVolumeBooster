@@ -7,21 +7,16 @@ Windows 用户态 API 无法把音频推过 100%，唯一干净的做法是让�
 """
 from __future__ import annotations
 
-import os
 import re
 import shutil
 from pathlib import Path
 from typing import Optional, Tuple
 
+from core.apo_install import CANDIDATE_CONFIGS, enabled_devices
+
 BACKUP_SUFFIX = ".luckybooster.bak"
 PREAMP_RE = re.compile(r"^\s*Preamp\s*:\s*([-+]?\d+(?:\.\d+)?)\s*dB", re.I)
 DEVICE_RE = re.compile(r"^\s*Device\s*:", re.I)
-
-CANDIDATE_CONFIGS = [
-    Path(r"C:\Program Files\EqualizerAPO\config\config.txt"),
-    Path(r"C:\Program Files (x86)\EqualizerAPO\config\config.txt"),
-    Path(os.path.expandvars(r"%APPDATA%\EqualizerAPO\config\config.txt")),
-]
 
 DOWNLOAD_URL = "https://sourceforge.net/projects/equalizerapo/"
 
@@ -107,8 +102,15 @@ class EqualizerAPO:
             return False, f"恢复失败：{exc}"
 
     @property
+    def ready(self) -> bool:
+        """已安装且至少对一个音频设备启用了 APO 滤镜。"""
+        return self.installed and bool(enabled_devices())
+
+    @property
     def status_text(self) -> str:
         if not self.installed:
-            return "未安装 · 安装后可解锁真正的 100% 以上全局增益"
+            return "未安装 · 内置官方安装包，一键装好即可突破 100% 上限"
+        if not enabled_devices():
+            return "已安装 · 尚无设备启用 APO 滤镜，前级增益不会生效"
         cur = self.read_preamp()
         return f"已就绪 · 当前前级增益 {cur:g} dB" if cur is not None else "已就绪 · 未设置前级增益"

@@ -21,6 +21,7 @@ from pathlib import Path
 BRAND_NAME = "Lucky万山之龙"
 BRAND_SITE = "www.Luckywszl.top"
 BRAND_URL = "https://www.Luckywszl.top"
+APP_VERSION = "1.1.0"
 
 # ---------------------------------------------------------------- 设计令牌
 FONT_DISPLAY = '"Noto Serif SC", "SimSun", Georgia, serif'

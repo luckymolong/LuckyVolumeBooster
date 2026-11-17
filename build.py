@@ -123,6 +123,14 @@ def main() -> int:
         args += ["--add-data", f"{avatar}{os.pathsep}."]
     else:
         print("[!] 未找到 assets/avatar.jpg，标题栏将显示兜底图标")
+    ap_setup = ASSETS / "EqualizerAPO-x64-1.4.2.exe"
+    if ap_setup.is_file() and ap_setup.stat().st_size > 1_000_000:
+        args += ["--add-binary", f"{ap_setup}{os.pathsep}."]
+        print(f"[ok] 内置 Equalizer APO 安装包: {ap_setup.name}  "
+              f"({ap_setup.stat().st_size / 1024 / 1024:.1f} MB)")
+    else:
+        print("[!] 未找到 assets/EqualizerAPO-x64-1.4.2.exe —— 一键安装将不可用")
+        print("    下载地址: https://sourceforge.net/projects/equalizerapo/files/1.4.2/")
     if icon:
         args += ["--icon", str(icon)]
     args.append(str(ROOT / "main.py"))

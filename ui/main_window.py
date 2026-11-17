@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
+from core import apo_install
 from core.audio_core import AudioEngine, db_to_factor
 from core.eq_apo import DOWNLOAD_URL, EqualizerAPO
 from core.video_core import (
@@ -290,6 +291,29 @@ class ProbeWorker(QObject):
         self.done.emit(info, self.path)
 
 
+class APOInstallWorker(QObject):
+    """后台静默安装内置 Equalizer APO —— 需要等待 UAC + 安装器结束，不能占用 UI 线程。"""
+    status = Signal(str)
+    done = Signal(bool, str)
+
+    def __init__(self, action: str = "install") -> None:
+        super().__init__()
+        self.action = action
+
+    def run(self) -> None:
+        try:
+            if self.action == "install":
+                ok, msg = apo_install.install(self.status.emit)
+            elif self.action == "selector":
+                self.status.emit("请在「设备选择器」里勾选播放设备，然后点确定…")
+                ok, msg = apo_install.open_device_selector()
+            else:
+                ok, msg = apo_install.open_bundle_folder()
+        except Exception as exc:  # noqa: BLE001
+            ok, msg = False, f"操作失败：{exc}"
+        self.done.emit(ok, msg)
+
+
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -337,6 +361,9 @@ class MainWindow(QMainWindow):
         self._probe_thread: QThread | None = None
         self._probe_worker: ProbeWorker | None = None
         self._probe_seq = 0
+        self._apo_thread: QThread | None = None
+        self._apo_worker: APOInstallWorker | None = None
+        self._eq_alt_mode = "bundle"
         self._auto_out = True
         self._boosting = False
 
@@ -465,7 +492,7 @@ class MainWindow(QMainWindow):
         site.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(BRAND_URL)))
         site.setToolTip("点击访问个人网站")
         lay.addWidget(site)
-        ver = make_label("v1.0  ·  Windows", "caption")
+        ver = make_label(f"v{theme.APP_VERSION}  ·  Windows", "caption")
         lay.addWidget(ver)
 
         outer.addWidget(side)
@@ -587,9 +614,10 @@ class MainWindow(QMainWindow):
         self.eq_status = ElideLabel(self.eqapo.status_text, "hint")
         col.addWidget(self.eq_status)
         top.addLayout(col, 1)
-        dl = Button("获取 / 说明", "ghost")
-        dl.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(DOWNLOAD_URL)))
-        top.addWidget(dl)
+        self.eq_link_btn = Button("官网", "ghost")
+        self.eq_link_btn.setToolTip("Equalizer APO 项目主页（安装包已随程序内置，无需前往）")
+        self.eq_link_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(DOWNLOAD_URL)))
+        top.addWidget(self.eq_link_btn)
         lay.addLayout(top)
 
         line = QHBoxLayout()
@@ -617,21 +645,74 @@ class MainWindow(QMainWindow):
         self.eq_line = line
         self.eq_apply_btn = apply_btn
         self.eq_reset_btn = reset_btn
-        lay.addLayout(line)
-        if not self.eqapo.installed:
-            # 未安装时不给「点了才报错」的假按钮
-            apply_btn.setEnabled(False)
-            reset_btn.setEnabled(False)
-            apply_btn.setToolTip("需先安装 Equalizer APO 并重启本程序")
-            self.eq_status.setText("未检测到 Equalizer APO · 安装并重启本程序后可用")
-        explain = make_label(
-            "Equalizer APO 工作在音频驱动层，可对最终输出做真正的数字前级放大，不受 100% 上限约束。"
-            "首次使用需安装并勾选「为所有设备启用」；本工具只写 config.txt 且自动备份，不改注册表、无需重启。",
-            "hint",
-        )
-        explain.setWordWrap(True)
-        lay.addWidget(explain)
+        line.setContentsMargins(0, 0, 0, 0)
+        self.eq_line_w = QWidget()
+        self.eq_line_w.setLayout(line)
+        lay.addWidget(self.eq_line_w)
+
+        # 安装 / 设备选择动作行：只有「不能直接调前级」时才出现
+        self.eq_action_row = QWidget()
+        arow = QHBoxLayout(self.eq_action_row)
+        arow.setContentsMargins(0, 0, 0, 0)
+        arow.setSpacing(10)
+        self.eq_install_btn = Button("一键安装 Equalizer APO", "primary")
+        self.eq_install_btn.setToolTip("安装包已内置在程序里，无需另行下载")
+        self.eq_install_btn.clicked.connect(self.install_eq_apo)
+        arow.addWidget(self.eq_install_btn, 1)
+        self.eq_alt_btn = Button("手动安装", "ghost")
+        self.eq_alt_btn.setFixedWidth(96)
+        self.eq_alt_btn.setToolTip("把内置安装包解到临时目录并在资源管理器中选中")
+        self.eq_alt_btn.clicked.connect(self.open_apo_bundle)
+        arow.addWidget(self.eq_alt_btn)
+        lay.addWidget(self.eq_action_row)
+
+        self.eq_explain = make_label("", "hint")
+        self.eq_explain.setWordWrap(True)
+        lay.addWidget(self.eq_explain)
+        self._sync_eq_state()
         return card
+
+    # ------------------------------------------------------- EQ 卡片状态机
+    def _sync_eq_state(self) -> None:
+        """三种状态：未安装 / 已安装但无设备启用 / 已就绪。"""
+        if not hasattr(self, "eq_action_row"):
+            return
+        installed = self.eqapo.installed
+        ready = self.eqapo.ready
+        self.eq_status.setText(self.eqapo.status_text)
+        self.eq_line_w.setVisible(ready)
+        self.eq_action_row.setVisible(not ready)
+        if ready:
+            self.eq_explain.setText(
+                "Equalizer APO 工作在音频驱动层，可对最终输出做真正的数字前级放大，不受 100% 上限约束。"
+                "本工具只改 config.txt 且自动备份原文件，「还原」即可复位。"
+            )
+            return
+        if not installed:
+            size = apo_install.bundle_size_mb()
+            tag = f"内置官方安装包 {size:.1f} MB" if size else "内置安装包缺失"
+            self.eq_install_btn.setText("一键安装 Equalizer APO")
+            self.eq_install_btn.setEnabled(True)
+            self.eq_alt_btn.setText("手动安装")
+            self.eq_alt_btn.setEnabled(True)
+            self._eq_alt_mode = "bundle"
+            self.eq_explain.setText(
+                f"上方按钮会直接从程序里解出官方安装包（{tag}）并静默安装，"
+                "只需在「用户账户控制」窗口点一次“是”，不用再去官网下载。"
+                "安装完成后需要重启电脑，音频驱动才会挂上滤波器。"
+            )
+            return
+        # 已安装但没有设备启用
+        self.eq_install_btn.setText("打开设备选择器")
+        self.eq_install_btn.setEnabled(True)
+        self.eq_alt_btn.setText("重新安装")
+        self.eq_alt_btn.setEnabled(True)
+        self._eq_alt_mode = "install"
+        self.eq_explain.setText(
+            "驱动已装好，但还没有音频设备挂上 APO 滤镜，所以前级增益不会生效。"
+            "点「打开设备选择器」，勾选你的扬声器 / 耳机（可勾「Troubleshooting options」里的全部），"
+            "确定后重启电脑即可。"
+        )
 
     # ---------------------------------------------------------- 页 2 窗口选择
     def _build_windows_page(self) -> None:
@@ -875,7 +956,7 @@ class MainWindow(QMainWindow):
             "枚举桌面窗口并自动关联对应进程（含子进程音频）的音量",
             "单独列出并增强无窗口的后台发声程序",
             "视频 / 音频文件 dB 增益、自动归一化、防削波限幅、画面无损导出",
-            "集成 Equalizer APO 驱动层前级放大，实现真正的 100% 以上全局增益",
+            "内置 Equalizer APO 官方安装包，一键装好驱动层前级放大，实现真正的 100% 以上全局增益",
         ):
             row = QHBoxLayout()
             dot = make_label("·", "dot")
@@ -897,14 +978,17 @@ class MainWindow(QMainWindow):
             "任何用户态软件都无法单靠 API 把某个窗口推到 200%。本工具因此提供三条真实可行的路径：\n"
             "① 会话级相对增益 + 系统主音量拉满（无需额外安装，听感提升最直接）；\n"
             "② 文件级 DSP 放大（ffmpeg volume + alimiter，可任意 +dB，导出后在任何设备都生效）；\n"
-            "③ Equalizer APO 驱动层 Preamp（全局真·超频，需安装 APO，本工具自动写配置并备份）。",
+            "③ Equalizer APO 驱动层 Preamp（全局真·超频，安装包已内置在程序里、一键静默安装，"
+            "本工具自动写配置并备份；装完需重启一次）。",
             "hint",
         )
         txt.setWordWrap(True)
         tl.addWidget(txt)
         lay.addWidget(tech)
         lay.addStretch(1)
-        foot = make_label(f"{BRAND_NAME}   ·   {BRAND_SITE}   ·   v1.0", "caption")
+        foot = make_label(
+            f"{BRAND_NAME}   ·   {BRAND_SITE}   ·   v{theme.APP_VERSION}", "caption"
+        )
         foot.setAlignment(Qt.AlignCenter)
         lay.addWidget(foot)
         self.stack.addWidget(page)
@@ -1305,13 +1389,56 @@ class MainWindow(QMainWindow):
         self.refresh_sessions()
 
     # ================================================================ EQ APO
+    def install_eq_apo(self) -> None:
+        """主按钮：未安装→静默安装；已安装但无设备→打开设备选择器。"""
+        if self.eqapo.installed and not self.eqapo.ready:
+            self._start_apo_action("selector", "打开设备选择器")
+        else:
+            self._start_apo_action("install", "一键安装")
+
+    def open_apo_bundle(self) -> None:
+        """次按钮：手动安装（解出内置安装包）/ 重新安装。"""
+        if self._eq_alt_mode == "install":
+            self._start_apo_action("install", "重新安装")
+        else:
+            self._start_apo_action("bundle", "手动安装")
+
+    def _start_apo_action(self, action: str, label: str) -> None:
+        if self._apo_thread is not None:
+            self.toast("上一个操作还在进行中，请稍候", ok=False)
+            return
+        self.eq_install_btn.setEnabled(False)
+        self.eq_alt_btn.setEnabled(False)
+        self.eq_install_btn.setText(f"{label}中…")
+        self.eq_status.setText(f"{label}中，请稍候…")
+        self._apo_thread = QThread(self)
+        self._apo_worker = APOInstallWorker(action)
+        self._apo_worker.moveToThread(self._apo_thread)
+        self._apo_thread.started.connect(self._apo_worker.run)
+        self._apo_worker.status.connect(self.eq_status.setText)
+        self._apo_worker.done.connect(self.on_apo_done)
+        self._apo_worker.done.connect(self._apo_thread.quit)
+        self._apo_thread.finished.connect(self._apo_thread.deleteLater)
+        self._apo_thread.start()
+
+    def on_apo_done(self, ok: bool, msg: str) -> None:
+        self._apo_thread = None
+        self._apo_worker = None
+        # 重新探测：安装后 config.txt 与注册表都可能刚出现
+        self.eqapo = EqualizerAPO()
+        self._sync_eq_state()
+        self.eq_install_btn.setEnabled(True)
+        self.eq_alt_btn.setEnabled(True)
+        self.toast(msg, ok)
+
     def apply_eq_preamp(self) -> None:
-        if not self.eqapo.installed:
-            self.toast("未检测到 Equalizer APO，请先安装并重启本程序", ok=False)
+        if not self.eqapo.ready:
+            self.toast("请先装好 Equalizer APO 并启用音频设备", ok=False)
+            self._sync_eq_state()
             return
         db = self.eq_slider.value()
         ok, msg = self.eqapo.set_preamp(db)
-        self.eq_status.setText(self.eqapo.status_text)
+        self._sync_eq_state()
         self.toast(msg, ok)
 
     def restore_eq(self) -> None:
@@ -1319,7 +1446,7 @@ class MainWindow(QMainWindow):
             self.toast("未检测到 Equalizer APO，无需还原", ok=False)
             return
         ok, msg = self.eqapo.restore()
-        self.eq_status.setText(self.eqapo.status_text)
+        self._sync_eq_state()
         self.toast(msg, ok)
 
     # ================================================================ 视频页
@@ -1513,6 +1640,11 @@ class MainWindow(QMainWindow):
 
     # ================================================================ 生命周期
     def closeEvent(self, event) -> None:  # noqa: N802
+        # APO 安装线程阻塞在等待安装器退出，强行销毁 QThread 会崩，直接拦住关闭
+        if self._apo_thread and self._apo_thread.isRunning():
+            self.toast("Equalizer APO 安装还在进行，请等它完成后再关闭", ok=False)
+            event.ignore()
+            return
         self.timer.stop()
         self._probe_seq += 1
         if self._probe_thread and self._probe_thread.isRunning():

@@ -108,6 +108,29 @@ def main() -> int:
         app.processEvents()
         print(f"  窗口选中 OK: {win.selected_window.title[:26] if win.selected_window else '-'}")
 
+    # 超频增益卡片三态：未安装 / 已装但没设备启用 / 就绪
+    class _FakeAPO:
+        def __init__(self, installed, ready, text):
+            self.installed = installed
+            self.ready = ready
+            self.status_text = text
+
+    real_eq = win.eqapo
+    for fake, want_install, want_slider in (
+        (_FakeAPO(False, False, "未安装 · 内置官方安装包"), True, False),
+        (_FakeAPO(True, False, "已安装 · 尚无设备启用 APO 滤镜"), True, False),
+        (_FakeAPO(True, True, "已就绪 · 当前前级增益 -6 dB"), False, True),
+    ):
+        win.eqapo = fake
+        win._sync_eq_state()
+        app.processEvents()
+        assert win.eq_action_row.isVisibleTo(win.eq_card) == want_install, "安装行显隐错误"
+        assert win.eq_line_w.isVisibleTo(win.eq_card) == want_slider, "滑块行显隐错误"
+    win.eqapo = real_eq
+    win._sync_eq_state()
+    app.processEvents()
+    print("  超频增益卡片三态（未装 / 无设备 / 就绪）OK")
+
     win.on_mode_changed()
     win.toast("自检提示")
     win.refresh_all()

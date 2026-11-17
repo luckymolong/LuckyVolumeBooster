@@ -34,9 +34,10 @@
 - 手动 0–24 dB 或自动归一化到 −1 dB，限幅器防削波
 - 视频流直接拷贝不重编码、画质无损；进度条基于 ffmpeg `out_time` 精确显示，可中途取消
 
-### 5. Equalizer APO 超频增益（可选）
-- 检测本机是否安装 [Equalizer APO](https://sourceforge.net/projects/equalizerapo/)，安装后可写 Preamp 配置实现全局真 100% 以上增益
-- 只写 config.txt 且自动备份，不改注册表、无需重启；未安装时按钮禁用并给出获取链接
+### 5. Equalizer APO 超频增益（一键安装，无需另行下载）
+- 程序内置 Equalizer APO 1.4.2 官方安装包（SHA-256 与 SourceForge 发布页一致），「超频增益」卡片里一键静默安装，只需在 UAC 窗口点一次“是”
+- 自动区分三种状态：未安装 → 一键安装；已装但没设备挂上滤镜 → 打开官方设备选择器；就绪 → 直接调 Preamp
+- 只写 config.txt 且自动备份，不改注册表；安装后需重启一次电脑让驱动挂上滤波器
 
 ## 一个诚实的技术说明
 
@@ -85,6 +86,7 @@ VolumeBooster/
 │   ├── audio_core.py     # WASAPI 会话枚举 / 音量 / 静音 / 电平 / 主音量
 │   ├── window_core.py    # 桌面窗口枚举与窗口→音频会话匹配
 │   ├── video_core.py     # ffmpeg 探测 / 增益命令构建 / 进度解析
+│   ├── apo_install.py    # 内置 Equalizer APO 静默安装 / 设备启用检测 / UAC 提权
 │   └── eq_apo.py         # Equalizer APO 检测与 Preamp 配置写入
 ├── ui/
 │   ├── theme.py          # 三套主题（设计令牌 + 动态 QSS，WCAG 对比度自检）
@@ -99,3 +101,12 @@ VolumeBooster/
 ## 许可证
 
 本项目以 [MIT License](LICENSE) 开源。`assets/avatar.jpg`（作者头像）版权归 [Lucky万山之龙](https://www.Luckywszl.top) 所有，仅供本项目展示使用，未经许可请勿用于其他用途。
+
+### 第三方组件
+
+| 组件 | 用途 | 许可证 |
+|---|---|---|
+| [Equalizer APO 1.4.2](https://sourceforge.net/projects/equalizerapo/) | 驱动层 Preamp（`assets/EqualizerAPO-x64-1.4.2.exe`，未修改的官方安装包） | GPL-2.0，源码见其项目主页 |
+| ffmpeg（`imageio-ffmpeg` 附带） | 文件级 dB 增益 | LGPL-2.1 / GPL（按其构建配置） |
+
+详见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。

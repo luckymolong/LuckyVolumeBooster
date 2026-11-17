@@ -22,6 +22,7 @@ def run_selfcheck() -> int:
     lines: list[str] = []
     try:
         from core.audio_core import AudioEngine
+        from core import apo_install
         from core.eq_apo import EqualizerAPO
         from core.video_core import find_ffmpeg
         from core.window_core import enum_visible_windows
@@ -38,6 +39,15 @@ def run_selfcheck() -> int:
         lines.append(f"master      = {engine.get_master_volume() * 100:.1f}%")
         lines.append(f"ffmpeg      = {find_ffmpeg()}")
         lines.append(f"eq_apo      = {EqualizerAPO().status_text}")
+        bundle = apo_install.bundle_path()
+        lines.append(
+            "apo_bundle  = "
+            + (f"{bundle.name} ({bundle.stat().st_size / 1024 / 1024:.1f} MB)" if bundle else "MISSING")
+        )
+        lines.append(
+            "apo_device  = "
+            f"已启用设备 {len(apo_install.enabled_devices())} 个，在用 {apo_install.active_device_count()} 个"
+        )
         win = MainWindow()
         win.show()
         app.processEvents()
